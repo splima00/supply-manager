@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import hashlib
+import hmac
+import secrets
 import sqlite3
 from pathlib import Path
 
 DEFAULT_DATABASE = Path(__file__).with_name("supplies.db")
+PASSWORD_ITERATIONS = 310_000
 
 
 def connect(database: Path) -> sqlite3.Connection:
@@ -34,11 +39,52 @@ def connect(database: Path) -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            salt BLOB NOT NULL,
+            password_hash BLOB NOT NULL,
+            iterations INTEGER NOT NULL
+        )
+        """
+    )
     supply_columns = {row[1] for row in connection.execute("PRAGMA table_info(supplies)")}
     if "vendor_id" not in supply_columns:
         connection.execute("ALTER TABLE supplies ADD COLUMN vendor_id INTEGER REFERENCES vendors(id)")
     connection.commit()
     return connection
+
+
+def create_user(connection: sqlite3.Connection, username: str, password: str) -> None:
+    if not username.strip():
+        raise ValueError("Username cannot be empty")
+    if not password:
+        raise ValueError("Password cannot be empty")
+    salt = secrets.token_bytes(16)
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
+    )
+    try:
+        connection.execute(
+            "INSERT INTO users (username, salt, password_hash, iterations) VALUES (?, ?, ?, ?)",
+            (username, salt, password_hash, PASSWORD_ITERATIONS),
+        )
+        connection.commit()
+    except sqlite3.IntegrityError as error:
+        raise ValueError(f"User '{username}' already exists") from error
+
+
+def verify_user(connection: sqlite3.Connection, username: str, password: str) -> bool:
+    user = connection.execute(
+        "SELECT salt, password_hash, iterations FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    if user is None:
+        return False
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), user["salt"], user["iterations"]
+    )
+    return hmac.compare_digest(password_hash, user["password_hash"])
 
 
 def find_vendor_id(connection: sqlite3.Connection, name: str) -> int:
@@ -160,7 +206,14 @@ def print_vendors(rows: list[sqlite3.Row]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage household or business supplies.")
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE, help="SQLite database path")
+    parser.add_argument("--user", help="Authenticate as this user")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    register = commands.add_parser("register", help="Create a user account")
+    register.add_argument("username")
+
+    login = commands.add_parser("login", help="Verify a user password")
+    login.add_argument("username")
 
     add = commands.add_parser("add", help="Add a supply")
     add.add_argument("name")
@@ -201,9 +254,28 @@ def main() -> int:
         parser.error("quantity cannot be negative")
     if arguments.command == "add" and arguments.reorder_level < 0:
         parser.error("reorder level cannot be negative")
+    if arguments.command not in {"register", "login"} and not arguments.user:
+        parser.error("--user is required; create an account with the register command")
 
     try:
         with connect(arguments.database) as connection:
+            if arguments.command == "register":
+                password = getpass.getpass("New password: ")
+                confirmation = getpass.getpass("Confirm password: ")
+                if password != confirmation:
+                    raise ValueError("Passwords do not match")
+                create_user(connection, arguments.username, password)
+                print(f"Registered user '{arguments.username}'.")
+            elif arguments.command == "login":
+                password = getpass.getpass("Password: ")
+                if not verify_user(connection, arguments.username, password):
+                    raise ValueError("Invalid username or password")
+                print(f"Logged in as '{arguments.username}'.")
+            else:
+                password = getpass.getpass("Password: ")
+                if not verify_user(connection, arguments.user, password):
+                    raise ValueError("Invalid username or password")
+
             if arguments.command == "add":
                 add_supply(
                     connection,
