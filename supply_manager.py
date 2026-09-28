@@ -7,6 +7,8 @@ import argparse
 import getpass
 import hashlib
 import hmac
+import json
+import os
 import secrets
 import sqlite3
 from pathlib import Path
@@ -49,6 +51,14 @@ def connect(database: Path) -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL
+        )
+        """
+    )
     supply_columns = {row[1] for row in connection.execute("PRAGMA table_info(supplies)")}
     if "vendor_id" not in supply_columns:
         connection.execute("ALTER TABLE supplies ADD COLUMN vendor_id INTEGER REFERENCES vendors(id)")
@@ -85,6 +95,61 @@ def verify_user(connection: sqlite3.Connection, username: str, password: str) ->
         "sha256", password.encode("utf-8"), user["salt"], user["iterations"]
     )
     return hmac.compare_digest(password_hash, user["password_hash"])
+
+
+def session_file(database: Path) -> Path:
+    return database.with_name(database.name + ".session")
+
+
+def save_session(connection: sqlite3.Connection, database: Path, username: str) -> None:
+    token = secrets.token_hex(32)
+    token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+    connection.execute(
+        "INSERT OR REPLACE INTO auth_sessions (username, token_hash) VALUES (?, ?)",
+        (username, token_hash),
+    )
+    connection.commit()
+    path = session_file(database)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as session_file_handle:
+        json.dump({"username": username, "token": token}, session_file_handle)
+
+
+def current_session(connection: sqlite3.Connection, database: Path) -> str | None:
+    path = session_file(database)
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+        username = session["username"]
+        token = session["token"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(username, str) or not isinstance(token, str):
+        return None
+    row = connection.execute(
+        "SELECT token_hash FROM auth_sessions WHERE username = ?", (username,)
+    ).fetchone()
+    if row is None:
+        return None
+    token_hash = hashlib.sha256(token.encode("ascii", errors="ignore")).hexdigest()
+    return username if hmac.compare_digest(token_hash, row["token_hash"]) else None
+
+
+def clear_session(connection: sqlite3.Connection, database: Path) -> None:
+    path = session_file(database)
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+        username = session.get("username")
+        token = session.get("token")
+        if isinstance(username, str) and isinstance(token, str):
+            token_hash = hashlib.sha256(token.encode("ascii", errors="ignore")).hexdigest()
+            connection.execute(
+                "DELETE FROM auth_sessions WHERE username = ? AND token_hash = ?",
+                (username, token_hash),
+            )
+            connection.commit()
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    path.unlink(missing_ok=True)
 
 
 def find_vendor_id(connection: sqlite3.Connection, name: str) -> int:
@@ -215,6 +280,9 @@ def build_parser() -> argparse.ArgumentParser:
     login = commands.add_parser("login", help="Verify a user password")
     login.add_argument("username")
 
+    commands.add_parser("logout", help="End the persistent login session")
+    commands.add_parser("menu", help="Open the interactive action menu")
+
     add = commands.add_parser("add", help="Add a supply")
     add.add_argument("name")
     add.add_argument("quantity", type=int)
@@ -254,9 +322,6 @@ def main() -> int:
         parser.error("quantity cannot be negative")
     if arguments.command == "add" and arguments.reorder_level < 0:
         parser.error("reorder level cannot be negative")
-    if arguments.command not in {"register", "login"} and not arguments.user:
-        parser.error("--user is required; create an account with the register command")
-
     try:
         with connect(arguments.database) as connection:
             if arguments.command == "register":
@@ -270,11 +335,29 @@ def main() -> int:
                 password = getpass.getpass("Password: ")
                 if not verify_user(connection, arguments.username, password):
                     raise ValueError("Invalid username or password")
+                save_session(connection, arguments.database, arguments.username)
                 print(f"Logged in as '{arguments.username}'.")
+            elif arguments.command == "logout":
+                clear_session(connection, arguments.database)
+                print("Logged out.")
             else:
-                password = getpass.getpass("Password: ")
-                if not verify_user(connection, arguments.user, password):
-                    raise ValueError("Invalid username or password")
+                username = arguments.user or current_session(connection, arguments.database)
+                if arguments.command == "menu" and username is None:
+                    username = input("Username: ").strip()
+                    password = getpass.getpass("Password: ")
+                    if not verify_user(connection, username, password):
+                        raise ValueError("Invalid username or password")
+                    save_session(connection, arguments.database, username)
+                elif arguments.user:
+                    password = getpass.getpass("Password: ")
+                    if not verify_user(connection, username, password):
+                        raise ValueError("Invalid username or password")
+                elif username is None:
+                    raise ValueError("Log in first with 'login USERNAME' or use --user USERNAME")
+
+                if arguments.command == "menu":
+                    run_menu(connection, arguments.database)
+                    return 0
 
             if arguments.command == "add":
                 add_supply(
@@ -307,6 +390,75 @@ def main() -> int:
     except ValueError as error:
         parser.error(str(error))
     return 0
+
+
+def run_menu(connection: sqlite3.Connection, database: Path) -> None:
+    actions = {
+        "1": "List supplies",
+        "2": "Add supply",
+        "3": "Update supply quantity",
+        "4": "Remove supply",
+        "5": "List vendors",
+        "6": "Add vendor",
+        "7": "Assign vendor to supply",
+        "8": "Remove vendor",
+        "9": "Log out",
+        "0": "Exit",
+    }
+    while True:
+        print("\nSupply Manager")
+        for key, label in actions.items():
+            print(f"{key}. {label}")
+        choice = input("Choose an action: ").strip()
+        try:
+            if choice == "0":
+                return
+            if choice == "9":
+                clear_session(connection, database)
+                print("Logged out.")
+                return
+            if choice == "1":
+                print_supplies(list_supplies(connection))
+            elif choice == "2":
+                name = input("Supply name: ").strip()
+                quantity = int(input("Quantity: "))
+                reorder_level = int(input("Reorder level [0]: ") or "0")
+                vendor = input("Vendor name [optional]: ").strip() or None
+                if quantity < 0 or reorder_level < 0:
+                    raise ValueError("Quantity and reorder level cannot be negative")
+                add_supply(connection, name, quantity, reorder_level, vendor)
+                print(f"Added '{name}'.")
+            elif choice == "3":
+                name = input("Supply name: ").strip()
+                quantity = int(input("New quantity: "))
+                if quantity < 0:
+                    raise ValueError("Quantity cannot be negative")
+                update_quantity(connection, name, quantity)
+                print(f"Updated '{name}'.")
+            elif choice == "4":
+                name = input("Supply name: ").strip()
+                remove_supply(connection, name)
+                print(f"Removed '{name}'.")
+            elif choice == "5":
+                print_vendors(list_vendors(connection))
+            elif choice == "6":
+                name = input("Vendor name: ").strip()
+                contact = input("Contact [optional]: ").strip()
+                add_vendor(connection, name, contact)
+                print(f"Added vendor '{name}'.")
+            elif choice == "7":
+                supply = input("Supply name: ").strip()
+                vendor = input("Vendor name: ").strip()
+                update_supply_vendor(connection, supply, vendor)
+                print(f"Updated vendor for '{supply}'.")
+            elif choice == "8":
+                name = input("Vendor name: ").strip()
+                remove_vendor(connection, name)
+                print(f"Removed vendor '{name}'.")
+            else:
+                print("Choose one of the listed actions.")
+        except (ValueError, sqlite3.IntegrityError) as error:
+            print(f"Error: {error}")
 
 
 if __name__ == "__main__":
