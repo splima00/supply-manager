@@ -418,7 +418,7 @@ def run_menu(connection: sqlite3.Connection, database: Path) -> None:
                 print("Logged out.")
                 return
             if choice == "1":
-                print_supplies(list_supplies(connection))
+                print_supplies(list_supplies(connection,low_stock_only=input("Show low stock only? (y/n) [n]: ").strip().lower() == "y", vendor_name=input("Filter by vendor (leave blank for all): ").strip() or None))
             elif choice == "2":
                 name = input("Supply name: ").strip()
                 quantity = int(input("Quantity: "))
