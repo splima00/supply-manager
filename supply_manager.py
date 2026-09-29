@@ -406,7 +406,7 @@ def run_menu(connection: sqlite3.Connection, database: Path) -> None:
         "0": "Exit",
     }
     while True:
-        print("\nSupply Manager")
+        print("Supply Manager")
         for key, label in actions.items():
             print(f"{key}. {label}")
         choice = input("Choose an action: ").strip()
