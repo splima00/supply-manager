@@ -1,6 +1,6 @@
 # Supply Manager
 
-A small command-line supply manager backed by SQLite. It uses only the Python standard library.
+A supply manager backed by SQLite, with command-line, desktop, and local browser interfaces. It uses only the Python standard library.
 
 ## Run
 
@@ -10,6 +10,8 @@ From this directory:
 python3 supply_manager.py register alice
 python3 supply_manager.py login alice
 python3 supply_manager.py menu
+python3 supply_manager.py desktop
+python3 supply_manager.py web
 python3 supply_manager.py add "Printer paper" 25 --reorder-level 10
 python3 supply_manager.py vendor-add "Office Depot" --contact purchasing@example.com
 python3 supply_manager.py add "Coffee" 4 --reorder-level 5 --vendor "Office Depot"
@@ -24,8 +26,14 @@ python3 supply_manager.py vendor-remove "Office Depot"
 python3 supply_manager.py logout
 ```
 
-The database is created automatically as `supplies.db`. Use `--database path/to/file.db` to select another database.
+The database is created automatically as `supplies.db`. Use `--database path/to/file.db` before the command to select another database, for example `python3 supply_manager.py --database data/supplies.db desktop`.
 Registration and login prompt for passwords without displaying them. Login persists a local session, so later commands and the interactive menu do not prompt again. `logout` ends the session. The session token is stored with owner-only file permissions; SQLite stores only its hash. Passwords are stored as salted PBKDF2 hashes. For one-off commands, `--user USERNAME` remains available and prompts for that user's password.
+
+## Graphical interfaces
+
+- Run `python3 supply_manager.py desktop` to open the Tk desktop interface. Sign in with an account created using `register USERNAME` or the web app. The desktop window supports stock filtering, supply and vendor management, and quantity updates.
+- Run `python3 supply_manager.py web` and open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser. The web server listens on the local computer only. Use `python3 supply_manager.py web --port 8080` to choose another port. You can register or sign in from the browser.
+- Both interfaces use the same SQLite database as the CLI. Pass `--database path/to/file.db` before `desktop` or `web` to use a different database.
 
 ## Commands
 
@@ -33,6 +41,8 @@ Registration and login prompt for passwords without displaying them. Login persi
 - `login USERNAME`
 - `logout`
 - `menu`
+- `desktop`
+- `web [--port PORT]`
 - `add NAME QUANTITY [--reorder-level LEVEL]`
 - `vendor-add NAME [--contact CONTACT]`
 - `vendor-list`

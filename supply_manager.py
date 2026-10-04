@@ -282,6 +282,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("logout", help="End the persistent login session")
     commands.add_parser("menu", help="Open the interactive action menu")
+    commands.add_parser("desktop", help="Open the desktop graphical interface")
+    web = commands.add_parser("web", help="Start the local browser application")
+    web.add_argument("--port", type=int, default=8000, help="Local web server port (default: 8000)")
 
     add = commands.add_parser("add", help="Add a supply")
     add.add_argument("name")
@@ -318,6 +321,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args()
+    if arguments.command == "desktop":
+        from supply_manager_gui import run as run_desktop
+
+        return run_desktop(arguments.database)
+    if arguments.command == "web":
+        if not 1 <= arguments.port <= 65535:
+            parser.error("port must be between 1 and 65535")
+        from supply_manager_web import run as run_web
+
+        return run_web(arguments.database, arguments.port)
     if arguments.command in {"add", "update"} and arguments.quantity < 0:
         parser.error("quantity cannot be negative")
     if arguments.command == "add" and arguments.reorder_level < 0:
