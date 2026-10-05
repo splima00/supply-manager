@@ -8,6 +8,7 @@ From this directory:
 
 ```bash
 python3 supply_manager.py register alice
+python3 supply_manager.py
 python3 supply_manager.py login alice
 python3 supply_manager.py menu
 python3 supply_manager.py desktop
@@ -27,7 +28,7 @@ python3 supply_manager.py logout
 ```
 
 The database is created automatically as `supplies.db`. Use `--database path/to/file.db` before the command to select another database, for example `python3 supply_manager.py --database data/supplies.db desktop`.
-Registration and login prompt for passwords without displaying them. Login persists a local session, so later commands and the interactive menu do not prompt again. `logout` ends the session. The session token is stored with owner-only file permissions; SQLite stores only its hash. Passwords are stored as salted PBKDF2 hashes. For one-off commands, `--user USERNAME` remains available and prompts for that user's password.
+Running `python3 supply_manager.py` without a command opens the interactive menu. If there is no active session, it prompts for a username and password, then opens the menu after a successful login. Registration and login prompt for passwords without displaying them. Login persists a local session, so later commands and the interactive menu do not prompt again. `logout` ends the session. The session token is stored with owner-only file permissions; SQLite stores only its hash. Passwords are stored as salted PBKDF2 hashes. For one-off commands, `--user USERNAME` remains available and prompts for that user's password.
 
 ## Graphical interfaces
 

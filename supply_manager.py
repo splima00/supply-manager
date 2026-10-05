@@ -101,6 +101,22 @@ def session_file(database: Path) -> Path:
     return database.with_name(database.name + ".session")
 
 
+def login(
+    connection: sqlite3.Connection,
+    database: Path,
+    username: str | None = None,
+) -> str:
+    print("Log in to Supply Manager")
+    if username is None:
+        username = input("Username: ").strip()
+    password = getpass.getpass("Password: ")
+    if not verify_user(connection, username, password):
+        raise ValueError("Invalid username or password")
+    save_session(connection, database, username)
+    print(f"Logged in as '{username}'.")
+    return username
+
+
 def save_session(connection: sqlite3.Connection, database: Path, username: str) -> None:
     token = secrets.token_hex(32)
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
@@ -272,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage household or business supplies.")
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE, help="SQLite database path")
     parser.add_argument("--user", help="Authenticate as this user")
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
 
     register = commands.add_parser("register", help="Create a user account")
     register.add_argument("username")
@@ -321,6 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args()
+    if arguments.command is None:
+        arguments.command = "menu"
     if arguments.command == "desktop":
         from supply_manager_gui import run as run_desktop
 
@@ -345,22 +363,14 @@ def main() -> int:
                 create_user(connection, arguments.username, password)
                 print(f"Registered user '{arguments.username}'.")
             elif arguments.command == "login":
-                password = getpass.getpass("Password: ")
-                if not verify_user(connection, arguments.username, password):
-                    raise ValueError("Invalid username or password")
-                save_session(connection, arguments.database, arguments.username)
-                print(f"Logged in as '{arguments.username}'.")
+                login(connection, arguments.database, arguments.username)
             elif arguments.command == "logout":
                 clear_session(connection, arguments.database)
                 print("Logged out.")
             else:
                 username = arguments.user or current_session(connection, arguments.database)
                 if arguments.command == "menu" and username is None:
-                    username = input("Username: ").strip()
-                    password = getpass.getpass("Password: ")
-                    if not verify_user(connection, username, password):
-                        raise ValueError("Invalid username or password")
-                    save_session(connection, arguments.database, username)
+                    login(connection, arguments.database)
                 elif arguments.user:
                     password = getpass.getpass("Password: ")
                     if not verify_user(connection, username, password):
